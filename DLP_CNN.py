@@ -1,3 +1,6 @@
+from keras.layers import Input,Conv2D, MaxPooling2D,Flatten,Dense,Embedding,Lambda
+from keras.models import Model
+from keras import backend as K
 import keras
 from keras.layers import Dense, Dropout, Activation, Flatten,Conv2D, MaxPooling2D
 from keras.layers.normalization import BatchNormalization
@@ -8,127 +11,61 @@ from keras.optimizers import SGD
 import numpy as np
 from keras.applications import imagenet_utils
 import Generate_data
+import tensorflow as tf
 from Generate_data import load_dataset
+#一些参数
 batch_siz = 128
 num_classes = 7
 nb_epoch = 60
 img_size=90
 root_path='./'
+feature_size = 2000
+
+#载入数据
 x_images=[]
 y_labels=[]
 x_images,y_labels=load_dataset('Train/',x_images,y_labels,img_size)
 x_val_images=[]
 y_val_labels=[]
 x_val_images,y_val_labels=load_dataset('Val/',x_val_images,y_val_labels,img_size)
+x_images=tf.convert_to_tensor(x_images)
+x_val_images=tf.convert_to_tensor(x_val_images)
+y_labels=tf.convert_to_tensor(y_labels)
+y_val_labels=tf.convert_to_tensor(y_val_labels)
+
+# input_shape=(img_size, img_size, 1)
+
+#创建网络模型
+input_image = Input(shape=(img_size,img_size,1))
+cnn = Conv2D(64, (3, 3), strides=1, padding='same')(input_image)
+cnn = Activation('relu')(cnn)
+cnn = MaxPooling2D(pool_size=(2, 2), strides=2)(cnn)
+cnn = Conv2D(96,(3,3), strides=1, padding='same')(cnn)
+cnn = Activation('relu')(cnn)
+cnn = MaxPooling2D(pool_size=(2, 2), strides=2)(cnn)
+cnn = Conv2D(128, (3, 3), strides=1, padding='same')(cnn)
+cnn = Activation('relu')(cnn)
+cnn = Conv2D(128, (3, 3), strides=1, padding='same')(cnn)
+cnn = Activation('relu')(cnn)
+cnn = MaxPooling2D(pool_size=(2, 2), strides=2)(cnn)
+cnn = Conv2D(256, (3, 3), strides=1, padding='same')(cnn)
+cnn = Activation('relu')(cnn)
+cnn = Conv2D(256, (3, 3), strides=1, padding='same')(cnn)
+cnn = Activation('relu')(cnn)
+cnn = Flatten()(cnn)
+feature = Dense(feature_size, activation='relu')(cnn)
+predict = Dense(num_classes, activation='softmax', name='softmax')(feature) #至此，得到一个常规的softmax分类模型
 
 
-class Model:
-    def __init__(self):
-        self.model = None
+input_target = Input(shape=(7,))
+centers = Embedding(num_classes, feature_size)(input_target) #Embedding层用来存放中心
+l2_loss = Lambda(lambda x: K.sum(K.square(x[0]-x[1][:,0]), 1, keepdims=True), name='l2_loss')([feature,centers])
 
-    def build_model(self):
-        self.model = Sequential()
-        self.model.add(Conv2D(64, (3, 3), strides=1, padding='same', input_shape=(img_size, img_size, 1)))
-        self.model.add(Activation('relu'))
-        self.model.add(MaxPooling2D(pool_size=(2, 2), strides=2))
-        self.model.add(Conv2D(96,(3,3), strides=1, padding='same'))
-        self.model.add(Activation('relu'))
-        self.model.add(MaxPooling2D(pool_size=(2, 2), strides=2))
-        self.model.add(Conv2D(128, (3, 3), strides=1, padding='same'))
-        self.model.add(Activation('relu'))
-        self.model.add(Conv2D(128, (3, 3), strides=1, padding='same'))
-        self.model.add(Activation('relu'))
-        self.model.add(MaxPooling2D(pool_size=(2, 2), strides=2))
-        self.model.add(Conv2D(256, (3, 3), strides=1, padding='same'))
-        self.model.add(Activation('relu'))
-        self.model.add(Conv2D(256, (3, 3), strides=1, padding='same'))
-        self.model.add(Activation('relu'))
-        self.model.add(Flatten())
-        self.model.add(Dense(2000))
-        self.model.add(Activation('relu'))
-        self.model.add(Dense(num_classes))
-        self.model.add(Activation('softmax'))
-        self.model.summary()
-    def train_model(self):
-        sgd=SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
-        self.model.compile(loss='categorical_crossentropy',
-                optimizer=sgd,
-                #optimizer='rmsprop',
-                metrics=['accuracy'])
-        #自动扩充训练样本
-        train_datagen = ImageDataGenerator(
-        rescale = 1./255,
-        shear_range = 0.2,
-        zoom_range = 0.2,
-        horizontal_flip=True)
-        #归一化验证集
-        val_datagen = ImageDataGenerator(
-                rescale = 1./255)
-        eval_datagen = ImageDataGenerator(
-                rescale = 1./255)
-        #以文件分类名划分label
-        train_generator = train_datagen.flow_from_directory(
-                root_path+'/Train',
-                target_size=(img_size,img_size),
-                color_mode='grayscale',
-                batch_size=batch_siz,
-                save_to_dir=root_path+'/SAVE_train',
-                save_format='jpeg',
-                class_mode='categorical')
+model_train = Model(inputs=[input_image,input_target], outputs=[predict,l2_loss])
+model_train.compile(optimizer='adam', loss=['sparse_categorical_crossentropy',lambda y_true,y_pred: y_pred], loss_weights=[1.,0.2], metrics={'softmax':'accuracy'})
 
+model_predict = Model(inputs=input_image, outputs=predict)
+model_predict.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
-        label_dict=train_datagen.flow_from_directory(root_path+'/Train',
-                target_size=(img_size,img_size),
-                color_mode='grayscale',
-                batch_size=1,
-                class_mode='categorical').class_indices
-        print(label_dict)
-        # val_generator = val_datagen.flow_from_directory(
-        #         root_path+'/Val_Aligned_Faces',
-        #         target_size=(img_size,img_size),
-        #         color_mode='grayscale',
-        #         batch_size=batch_siz,
-        #         class_mode='categorical')
-        val_generator = eval_datagen.flow_from_directory(
-                root_path+'/Val',
-                target_size=(img_size,img_size),
-                color_mode='grayscale',
-                batch_size=batch_siz,
-                class_mode='categorical')
-        early_stopping = EarlyStopping(monitor='loss',patience=3)
-        history_fit=self.model.fit_generator(
-                train_generator,
-                steps_per_epoch=800/(batch_siz/32),#28709
-                nb_epoch=nb_epoch,
-                validation_data=val_generator,
-                validation_steps=2000,
-                #callbacks=[early_stopping]
-                )
-        history_eval=self.model.evaluate_generator(
-                val_generator,
-                steps=2000)
-        history_predict=self.model.predict_generator(
-                val_generator,
-                steps=2000)
-        # with open(root_path+'/model_fit_log','w') as f:
-        #     f.write(str(history_fit.history))
-        # with open(root_path+'/model_predict_log','w') as f:
-        #     f.write(str(history_predict))
-        # print("%s: %.2f%%" % (self.model.metrics_names[1], history_eval[1] * 100))
-        print('model trained')
-    def save_model(self):
-        model_json=self.model.to_json()
-        with open(root_path+"/model_json.json", "w") as json_file:
-            json_file.write(model_json)
-        self.model.save_weights(root_path+'/model_weight.h5')
-        self.model.save(root_path+'/model.h5')
-        print('model saved')
-
-if __name__=='__main__':
-    model=Model()
-    model.build_model()
-    print('model built')
-    model.train_model()
-    print('model trained')
-    model.save_model()
-print('model saved')
+model_train.fit([x_images, y_labels], epochs=50, steps_per_epoch=800/(batch_siz/32))
+# score = model_predict.evaluate([y_labels, y_val_labels],batch_size=128)
